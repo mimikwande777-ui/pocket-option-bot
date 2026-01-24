@@ -1,168 +1,142 @@
-# main.py
-
 import os
 import time
 import yfinance as yf
 import pandas as pd
 from ta.momentum import RSIIndicator
-from ta.trend import EMAIndicator
 from dotenv import load_dotenv
-import requests
+from telegram import Bot
 
-# Load Telegram token from .env
-load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Example in .env: TELEGRAM_TOKEN=123456:ABC-XYZ
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Example: TELEGRAM_CHAT_ID=123456789
-
-import os
-from dotenv import load_dotenv
-
+# =========================
+# LOAD ENV
+# =========================
 load_dotenv()
 
-# === SAFE CLOUD CONFIG ===
-PAIRS = os.getenv("PAIRS", "EURUSD=X,GBPUSD=X").split(",")
-TIMEFRAME = os.getenv("TIMEFRAME", "1m")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-print(f"📊 Trading pairs: {PAIRS}")
-print(f"⏱️ Timeframe: {TIMEFRAME}")
+bot = Bot(token=TELEGRAM_TOKEN)
 
-# Telegram function
-def send_telegram_message(message):
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        try:
-            requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
-        except Exception as e:
-            print(f"⚠️ Telegram error: {e}")
+# =========================
+# SETTINGS (NO input())
+# =========================
+PAIRS = [
+    "EURUSD=X",
+    "GBPUSD=X",
+    "USDJPY=X",
+    "AUDUSD=X",
+    "USDCAD=X"
+]
 
-# Download data safely
-def get_data(pair):
+TIMEFRAME = "5m"
+INTERVAL_SECONDS = 60
+LOOKBACK = 50
+
+# =========================
+# DATA FETCH
+# =========================
+def fetch_data(symbol):
     try:
-        period = "7d" if TIMEFRAME == "1m" else "30d"
-        data = yf.download(tickers=pair, period=period, interval=TIMEFRAME, progress=False)
-        if data.empty:
-            print(f"⚠️ No data for {pair} at {TIMEFRAME}. Skipping...")
+        df = yf.download(
+            symbol,
+            period="7d",
+            interval=TIMEFRAME,
+            progress=False
+        )
+
+        if df is None or df.empty:
             return None
-        return data
-    except Exception as e:
-        print(f"⚠️ Error fetching {pair}: {e}")
+
+        df.dropna(inplace=True)
+        return df
+    except Exception:
         return None
 
-# Analyze each market
-def analyze_market(pair, data):
-    close = data['Close'].squeeze()
-    if close.empty:
-        return None
-
-    # Indicators
-    rsi = RSIIndicator(close, window=14).rsi()
-    ema_fast = EMAIndicator(close, window=9).ema_indicator()
-    ema_slow = EMAIndicator(close, window=21).ema_indicator()
-
+# =========================
+# SUPPLY / DEMAND (FIXED)
+# =========================
+def detect_supply_demand(df):
     try:
-        latest_price = float(close.iloc[-1])
-        latest_rsi = float(rsi.iloc[-1])
-        latest_fast = float(ema_fast.iloc[-1])
-        latest_slow = float(ema_slow.iloc[-1])
-    except Exception as e:
-        print(f"⚠️ Error converting indicators to float for {pair}: {e}")
-        return None
+        high_series = df["High"].rolling(LOOKBACK).max()
+        low_series = df["Low"].rolling(LOOKBACK).min()
 
-    # Trend & Signal
-    trend = "UP" if latest_fast > latest_slow else "DOWN"
-    signal = "WAIT"
-    if trend == "UP" and latest_rsi < 30:
-        signal = "BUY"
-    elif trend == "DOWN" and latest_rsi > 70:
-        signal = "SELL"
-
-    # Supply/Demand & FVG placeholders
-       def detect_supply_demand(data, lookback=50):
-    try:
-        # Force single-column Series (fixes MultiIndex issue)
-        high = data['High']
-        low = data['Low']
-
-        if isinstance(high, dict) or hasattr(high, 'columns'):
-            high = high.iloc[:, 0]
-        if isinstance(low, dict) or hasattr(low, 'columns'):
-            low = low.iloc[:, 0]
-
-        rolling_high = high.rolling(window=lookback).max()
-        rolling_low = low.rolling(window=lookback).min()
-
-        supply = rolling_high.iloc[-1]
-        demand = rolling_low.iloc[-1]
-
-        if supply is not None:
-            supply = float(supply)
-        if demand is not None:
-            demand = float(demand)
+        supply = float(high_series.iloc[-1])
+        demand = float(low_series.iloc[-1])
 
         return supply, demand
-
-    except Exception as e:
-        print(f"⚠️ Supply/Demand detection error: {e}")
+    except Exception:
         return None, None
- fvg = "Neutral"
+
+# =========================
+# ANALYSIS
+# =========================
+def analyze_market(symbol, df):
+    close = df["Close"]
+
+    rsi = RSIIndicator(close, window=14).rsi().iloc[-1]
+    price = float(close.iloc[-1])
+
+    supply, demand = detect_supply_demand(df)
+
+    trend = "UP" if close.iloc[-1] > close.iloc[-20] else "DOWN"
+
+    signal = "WAIT"
+    if rsi < 30 and trend == "UP":
+        signal = "BUY"
+    elif rsi > 70 and trend == "DOWN":
+        signal = "SELL"
 
     return {
-        "pair": pair,
-        "price": latest_price,
+        "symbol": symbol,
+        "price": price,
+        "rsi": round(rsi, 2),
         "trend": trend,
-        "rsi": latest_rsi,
         "signal": signal,
         "supply": supply,
-        "demand": demand,
-        "fvg": fvg
+        "demand": demand
     }
 
-# Main bot loop
-def run_bot():
-    print("📡 Pocket Option Advanced Signal Bot Started...\n")
+# =========================
+# TELEGRAM
+# =========================
+def send_signal(data):
+    msg = (
+        f"📊 *Pocket Option Signal*\n\n"
+        f"💱 Pair: `{data['symbol']}`\n"
+        f"💰 Price: {data['price']}\n"
+        f"📈 Trend: {data['trend']}\n"
+        f"📉 RSI: {data['rsi']}\n"
+        f"🟢 Signal: *{data['signal']}*\n"
+        f"🔺 Supply: {data['supply']}\n"
+        f"🔻 Demand: {data['demand']}"
+    )
+
+    bot.send_message(
+        chat_id=CHAT_ID,
+        text=msg,
+        parse_mode="Markdown"
+    )
+
+# =========================
+# MAIN LOOP
+# =========================
+def run():
+    bot.send_message(chat_id=CHAT_ID, text="🚀 Signal bot started")
+
     while True:
-        messages = []
         for pair in PAIRS:
-            pair = pair.strip()
-            data = get_data(pair)
-            if data is None:
-                continue
-            result = analyze_market(pair, data)
-            if result is None:
+            df = fetch_data(pair)
+            if df is None:
                 continue
 
-            message = (
-                f"===================================\n"
-                f"PAIR: {result['pair']}\n"
-                f"PRICE: {result['price']}\n"
-                f"TREND: {result['trend']}\n"
-                f"RSI: {result['rsi']}\n"
-                f"SIGNAL: {result['signal']}\n"
-                f"SUPPLY: {result['supply']}\n"
-                f"DEMAND: {result['demand']}\n"
-                f"FVG: {result['fvg']}\n"
-                f"==================================="
-            )
-            print(message)
-            messages.append(message)
+            result = analyze_market(pair, df)
 
-        # Send combined message to Telegram
-        if messages:
-            send_telegram_message("\n\n".join(messages))
+            if result["signal"] != "WAIT":
+                send_signal(result)
 
-        # Wait based on timeframe
-        if TIMEFRAME.endswith("m"):
-            sleep_time = int(TIMEFRAME.replace("m", "")) * 60
-        elif TIMEFRAME.endswith("h"):
-            sleep_time = int(TIMEFRAME.replace("h", "")) * 3600
-        elif TIMEFRAME.endswith("d"):
-            sleep_time = int(TIMEFRAME.replace("d", "")) * 86400
-        else:
-            sleep_time = 60  # default 1 minute
+        time.sleep(INTERVAL_SECONDS)
 
-        print(f"⏳ Waiting {sleep_time} seconds until next scan...\n")
-        time.sleep(sleep_time)
-
-# Run the bot
+# =========================
+# START
+# =========================
 if __name__ == "__main__":
-    run_bot()
+    run()
