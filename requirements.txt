@@ -1,6 +1,7 @@
+python-dotenv
+python-telegram-bot==20.7
 yfinance
 pandas
 numpy
 ta
-python-dotenv
 requests
