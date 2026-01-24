@@ -14,9 +14,17 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # Example in .env: TELEGRAM_TOKEN=123456:ABC-XYZ
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # Example: TELEGRAM_CHAT_ID=123456789
 
-# User input for markets and timeframe
-PAIRS = input("Enter symbols separated by commas (e.g., EURUSD=X,GBPUSD=X,USDJPY=X): ").split(",")
-TIMEFRAME = input("Enter timeframe (1m,5m,15m,1h,4h,1d,1w,1mo): ")
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# === SAFE CLOUD CONFIG ===
+PAIRS = os.getenv("PAIRS", "EURUSD=X,GBPUSD=X").split(",")
+TIMEFRAME = os.getenv("TIMEFRAME", "1m")
+
+print(f"📊 Trading pairs: {PAIRS}")
+print(f"⏱️ Timeframe: {TIMEFRAME}")
 
 # Telegram function
 def send_telegram_message(message):
