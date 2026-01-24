@@ -77,12 +77,34 @@ def analyze_market(pair, data):
         signal = "SELL"
 
     # Supply/Demand & FVG placeholders
-    LOOKBACK = 20
-    rolling_high = data['High'].rolling(window=LOOKBACK).max()
-    rolling_low = data['Low'].rolling(window=LOOKBACK).min()
-    supply = float(rolling_high.iloc[-1]) if not rolling_high.empty else None
-    demand = float(rolling_low.iloc[-1]) if not rolling_low.empty else None
-    fvg = "Neutral"
+       def detect_supply_demand(data, lookback=50):
+    try:
+        # Force single-column Series (fixes MultiIndex issue)
+        high = data['High']
+        low = data['Low']
+
+        if isinstance(high, dict) or hasattr(high, 'columns'):
+            high = high.iloc[:, 0]
+        if isinstance(low, dict) or hasattr(low, 'columns'):
+            low = low.iloc[:, 0]
+
+        rolling_high = high.rolling(window=lookback).max()
+        rolling_low = low.rolling(window=lookback).min()
+
+        supply = rolling_high.iloc[-1]
+        demand = rolling_low.iloc[-1]
+
+        if supply is not None:
+            supply = float(supply)
+        if demand is not None:
+            demand = float(demand)
+
+        return supply, demand
+
+    except Exception as e:
+        print(f"⚠️ Supply/Demand detection error: {e}")
+        return None, None
+ fvg = "Neutral"
 
     return {
         "pair": pair,
