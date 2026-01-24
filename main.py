@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import yfinance as yf
 import pandas as pd
 from ta.momentum import RSIIndicator
@@ -17,7 +18,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 bot = Bot(token=TELEGRAM_TOKEN)
 
 # =========================
-# SETTINGS (NO input())
+# SETTINGS
 # =========================
 PAIRS = [
     "EURUSD=X",
@@ -28,11 +29,11 @@ PAIRS = [
 ]
 
 TIMEFRAME = "5m"
-INTERVAL_SECONDS = 60
 LOOKBACK = 50
+SCAN_DELAY = 60
 
 # =========================
-# DATA FETCH
+# FETCH DATA
 # =========================
 def fetch_data(symbol):
     try:
@@ -46,22 +47,19 @@ def fetch_data(symbol):
         if df is None or df.empty:
             return None
 
-        df.dropna(inplace=True)
+        df = df.dropna()
         return df
+
     except Exception:
         return None
 
 # =========================
-# SUPPLY / DEMAND (FIXED)
+# SUPPLY & DEMAND
 # =========================
 def detect_supply_demand(df):
     try:
-        high_series = df["High"].rolling(LOOKBACK).max()
-        low_series = df["Low"].rolling(LOOKBACK).min()
-
-        supply = float(high_series.iloc[-1])
-        demand = float(low_series.iloc[-1])
-
+        supply = float(df["High"].rolling(LOOKBACK).max().iloc[-1])
+        demand = float(df["Low"].rolling(LOOKBACK).min().iloc[-1])
         return supply, demand
     except Exception:
         return None, None
@@ -70,14 +68,14 @@ def detect_supply_demand(df):
 # ANALYSIS
 # =========================
 def analyze_market(symbol, df):
-    close = df["Close"]
+    close = df["Close"].squeeze()  # 🔥 FIX: FORCE 1D
 
-    rsi = RSIIndicator(close, window=14).rsi().iloc[-1]
+    rsi = RSIIndicator(close=close, window=14).rsi().iloc[-1]
     price = float(close.iloc[-1])
 
-    supply, demand = detect_supply_demand(df)
-
     trend = "UP" if close.iloc[-1] > close.iloc[-20] else "DOWN"
+
+    supply, demand = detect_supply_demand(df)
 
     signal = "WAIT"
     if rsi < 30 and trend == "UP":
@@ -87,8 +85,8 @@ def analyze_market(symbol, df):
 
     return {
         "symbol": symbol,
-        "price": price,
-        "rsi": round(rsi, 2),
+        "price": round(price, 5),
+        "rsi": round(float(rsi), 2),
         "trend": trend,
         "signal": signal,
         "supply": supply,
@@ -98,19 +96,19 @@ def analyze_market(symbol, df):
 # =========================
 # TELEGRAM
 # =========================
-def send_signal(data):
+async def send_signal(data):
     msg = (
         f"📊 *Pocket Option Signal*\n\n"
         f"💱 Pair: `{data['symbol']}`\n"
         f"💰 Price: {data['price']}\n"
         f"📈 Trend: {data['trend']}\n"
         f"📉 RSI: {data['rsi']}\n"
-        f"🟢 Signal: *{data['signal']}*\n"
+        f"🚦 Signal: *{data['signal']}*\n"
         f"🔺 Supply: {data['supply']}\n"
         f"🔻 Demand: {data['demand']}"
     )
 
-    bot.send_message(
+    await bot.send_message(
         chat_id=CHAT_ID,
         text=msg,
         parse_mode="Markdown"
@@ -119,8 +117,11 @@ def send_signal(data):
 # =========================
 # MAIN LOOP
 # =========================
-def run():
-    bot.send_message(chat_id=CHAT_ID, text="🚀 Signal bot started")
+async def run():
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text="🚀 Pocket Option bot is LIVE"
+    )
 
     while True:
         for pair in PAIRS:
@@ -131,12 +132,12 @@ def run():
             result = analyze_market(pair, df)
 
             if result["signal"] != "WAIT":
-                send_signal(result)
+                await send_signal(result)
 
-        time.sleep(INTERVAL_SECONDS)
+        await asyncio.sleep(SCAN_DELAY)
 
 # =========================
 # START
 # =========================
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())
